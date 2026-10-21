@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ロボットのアニメーション</title>
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/3.4.7/aframe/build/aframe-ar.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #hud {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            z-index: 10;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        #hud button, #hud select {
+            min-height: 48px;
+            padding: 12px 20px;
+            font-size: 20px;
+        }
+        #hud label { background: white; padding: 4px; }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <button id="walkButton" type="button">歩く</button>
+        <button id="danceButton" type="button">踊る</button>
+        <button id="pauseButton" type="button">一時停止</button>
+        <button id="resumeButton" type="button">再開</button>
+    </div>
+    <a-scene embedded arjs="sourceType: webcam">
+        <a-marker preset="hiro" smooth="true">
+            <a-gltf-model id="exhibit" src="robot.glb"
+                          position="0 0 0.5" scale="0.3 0.3 0.3" rotation="-90 0 0"
+                          animation-mixer="clip: RobotArmature|Robot_Dance; timeScale: 1">
+            </a-gltf-model>
+        </a-marker>
+        <a-entity camera></a-entity>
+    </a-scene>
+    <script>
+        const exhibit = document.getElementById('exhibit');
+        const pauseButton = document.getElementById('pauseButton');
+        const resumeButton = document.getElementById('resumeButton');
+        let currentClip = 'RobotArmature|Robot_Dance';
+        let speed = 1;
+        let isPaused = false;
+
+        // 先に速度を0へ。再利用される動きにも選んだ速さを確実に適用する。
+        function applyAnimation() {
+            exhibit.setAttribute('animation-mixer', 'timeScale', 0);
+            exhibit.setAttribute('animation-mixer', 'clip', currentClip);
+            if (isPaused) {
+                exhibit.setAttribute('animation-mixer', 'timeScale', 0);
+            } else {
+                exhibit.setAttribute('animation-mixer', 'timeScale', speed);
+            }
+        }
+
+        function pauseAnimation() {
+            isPaused = true;
+            applyAnimation();
+        }
+
+        function resumeAnimation() {
+            isPaused = false;
+            applyAnimation();
+        }
+
+        pauseButton.addEventListener('click', pauseAnimation);
+        resumeButton.addEventListener('click', resumeAnimation);
+        const walkButton = document.getElementById('walkButton');
+        const danceButton = document.getElementById('danceButton');
+
+        function walkRobot() {
+            currentClip = 'RobotArmature|Robot_Walking';
+            applyAnimation();
+        }
+
+        function danceRobot() {
+            currentClip = 'RobotArmature|Robot_Dance';
+            applyAnimation();
+        }
+
+        walkButton.addEventListener('click', walkRobot);
+        danceButton.addEventListener('click', danceRobot);
+    </script>
+</body>
+</html>
