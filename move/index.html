@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/3.4.7/aframe/build/aframe-ar.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
+
+    <style>
+        #hud {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 999;
+        }
+
+        button {
+            font-size: 20px;
+            padding: 12px 20px;
+            border: none;
+            background-color: royalblue;
+            color: white;
+            border-radius: 10px;
+            margin-right: 10px;
+        }
+
+        select {
+            font-size: 18px;
+            padding: 10px 14px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+        }
+
+        .place {
+            background-color: coral;
+        }
+
+        .reset {
+            background-color: lightgreen;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="hud">
+        <select id="animationSelect">
+            <option value="RobotArmature|Robot_Walking" selected>あるく</option>
+            <option value="RobotArmature|Robot_Dance">おどる</option>
+        </select>
+        <button id="enlargeButton">拡大</button>
+        <button id="shrinkButton">縮小</button>
+        <button id="rotateButton">回転</button>
+        <button id="reverseButton">逆回転</button>
+        <button class="place" id="topButton">上へ</button>
+        <button class="place" id="downButton">下へ</button>
+        <button class="place" id="rightButton">右へ</button>
+        <button class="place" id="leftButton">左へ</button>
+        <button class="reset" id="resetButton">リセット</button>
+    </div>
+
+    <a-scene embedded arjs="sourceType: webcam">
+
+        <a-marker preset="hiro" smooth="true">
+            <a-entity id="model" position="0 0 0.5">
+                <a-gltf-model id="robot" src="robot.glb" position="0 0 0" scale="0.3 0.3 0.3" rotation="-90 0 0"
+                    animation-mixer="clip: RobotArmature|Robot_Walking">
+                </a-gltf-model>
+            </a-entity>
+        </a-marker>
+
+        <a-entity camera></a-entity>
+
+    </a-scene>
+
+    <script>
+        const animationSelect = document.getElementById('animationSelect');
+        const robot = document.getElementById("robot");
+        const model = document.getElementById("model");
+        const enlargeButton = document.getElementById("enlargeButton");
+        const rotationButton = document.getElementById("rotationButton");
+        const shrinkButton = document.getElementById("shrinkButton");
+        const reverseButton = document.getElementById("reverseButton");
+        const rightButton = document.getElementById("rightButton");
+        const downButton = document.getElementById("downButton");
+
+        let size = 1;
+
+
+        function enlargeModel() {
+            size = size + 0.1;
+            model.setAttribute('scale', `${size} ${size} ${size}`);
+        }
+        function shrinkModel() {
+            size = size - 0.1;
+            model.setAttribute('scale', `${size} ${size} ${size}`);
+        }
+
+        enlargeButton.addEventListener('click', enlargeModel);
+        shrinkButton.addEventListener('click', shrinkModel);
+
+        let angle = 0;
+
+        function rotateModel() {
+            angle += 15;
+            model.setAttribute('rotation', `0 0 ${angle}`);
+        }
+        function reverseModel() {
+            angle -= 15;
+            model.setAttribute('rotation', `0 0 ${angle}`);
+        }
+
+        rotateButton.addEventListener('click', rotateModel);
+        reverseButton.addEventListener('click', reverseModel);
+
+
+        let x = 0;
+        let z = 0.5;
+
+        function toRightModel() {
+            x += 0.1;
+            model.setAttribute("position", `${x} 0 ${z}`);
+        }
+
+        rightButton.addEventListener("click", toRightModel);
+
+        function toDownModel() {
+            z += 0.1;
+            model.setAttribute("position", `${x} 0 ${z}`);
+        }
+
+        downButton.addEventListener("click", toDownModel);
+
+        function changeAnimation() {
+            robot.setAttribute('animation-mixer', 'clip',
+                animationSelect.value);
+        }
+
+        animationSelect.addEventListener('change',
+            changeAnimation);
+
+    </script>
+</body>
+
+</html>
