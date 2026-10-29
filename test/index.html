@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Hand Tracking Magic Circle</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #111; }
+    video, canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: cover;
+    }
+    #webcam, #overlay {
+      transform: scaleX(-1);
+    }
+    /* エラーや状態を画面に表示するUI */
+    #status {
+      position: absolute;
+      top: 10px; left: 10px;
+      color: #00ff00;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 14px;
+      z-index: 100;
+      max-width: 90vw;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">初期化中...</div>
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script type="module">
+    import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js";
+
+    const statusEl = document.getElementById("status");
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("overlay");
+
+    function log(msg, isError = false) {
+      console.log(msg);
+      statusEl.textContent = msg;
+      if (isError) statusEl.style.color = "#ff4444";
+    }
+
+    let handLandmarker, scene, camera, renderer, magicCircle;
+
+    function initThree() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.z = 2;
+
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      const geometry = new THREE.RingGeometry(0.12, 0.16, 32);
+      const material = new THREE.MeshBasicMaterial({ 
+        color: 0x00ffff, 
+        side: THREE.DoubleSide, 
+        transparent: true, 
+        opacity: 0.85 
+      });
+      magicCircle = new THREE.Mesh(geometry, material);
+      magicCircle.visible = false;
+      scene.add(magicCircle);
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    async function setupCamera() {
+      log("カメラを起動中...");
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("このブラウザまたは環境（HTTPS以外など）ではカメラがサポートされていません。");
+      }
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, facingMode: "user" },
+        audio: false
+      });
+      video.srcObject = stream;
+      
+      return new Promise((resolve) => {
+        video.onloadeddata = () => {
+          video.play();
+          log("カメラ起動成功。AIモデルをロード中...");
+          resolve();
+        };
+      });
+    }
+
+    async function initHandLandmarker() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      );
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+      });
+      log("準備完了！カメラに掌をかざしてください");
+      setTimeout(() => { statusEl.style.display = "none"; }, 3000);
+    }
+
+    let lastVideoTime = -1;
+    function renderLoop() {
+      if (handLandmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        const results = handLandmarker.detectForVideo(video, performance.now());
+
+        if (results.landmarks && results.landmarks.length > 0) {
+          const landmarks = results.landmarks[0];
+          const wrist = landmarks[0];
+          const middleMCP = landmarks[9];
+
+          const palmNormX = (wrist.x + middleMCP.x) / 2;
+          const palmNormY = (wrist.y + middleMCP.y) / 2;
+
+          const ndcX = (palmNormX - 0.5) * 2;
+          const ndcY = -(palmNormY - 0.5) * 2;
+
+          magicCircle.position.x = ndcX * 1.2;
+          magicCircle.position.y = ndcY * 0.8;
+          magicCircle.rotation.z += 0.03;
+          magicCircle.visible = true;
+        } else {
+          magicCircle.visible = false;
+        }
+      }
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(renderLoop);
+    }
+
+    async function main() {
+      try {
+        initThree();
+        await setupCamera();
+        await initHandLandmarker();
+        renderLoop();
+      } catch (err) {
+        log("エラーが発生しました:\n" + err.message, true);
+        console.error(err);
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>

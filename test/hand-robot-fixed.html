@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>手のひらAR — robot.glb</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #090e1b; font-family: system-ui, sans-serif; }
+    #video, #three { position: fixed; inset: 0; width: 100%; height: 100%; }
+    #video { object-fit: cover; }
+    #three { pointer-events: none; }
+    #controls { position: fixed; z-index: 3; bottom: max(24px, env(safe-area-inset-bottom)); left: 0; right: 0; display: flex; gap: 12px; justify-content: center; padding: 0 16px; }
+    button { font: inherit; color: white; background: #2764df; border: none; border-radius: 14px; padding: 13px 20px; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #switchBtn { background: #26354f; }
+    #status { position: fixed; z-index: 3; top: max(18px, env(safe-area-inset-top)); left: 16px; right: 16px; text-align: center; color: white; text-shadow: 0 1px 6px #000; font-size: 14px; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <div id="status">カメラを開始すると、手のひらにロボットが現れます</div>
+  <div id="controls">
+    <button id="startBtn">カメラを開始</button>
+    <button id="switchBtn" hidden>カメラ切替</button>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    // MediaPipeはカメラ開始時に読み込む（失敗したら画面に原因を表示する）
+
+    const video = document.querySelector('#video');
+    const status = document.querySelector('#status');
+    const startBtn = document.querySelector('#startBtn');
+    const switchBtn = document.querySelector('#switchBtn');
+
+    let facingMode = 'environment';  // 背面カメラ。切替ボタンで前面にもできる
+    let handLandmarker;
+    let stream;
+    let mixer;
+    let modelHeight = 1;
+    let lastVideoTime = -1;
+    let started = false;
+    const clock = new THREE.Clock();
+
+    // カメラ映像の上に、透明なThree.jsを重ねる
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+    camera.position.z = 10;
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x000000, 0);
+    renderer.domElement.id = 'three';
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x667799, 2.3));
+    const light = new THREE.DirectionalLight(0xffffff, 2.1);
+    light.position.set(2, 5, 8);
+    scene.add(light);
+
+    const robot = new THREE.Group();
+    robot.visible = false;
+    scene.add(robot);
+
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      const a = w / h;
+      camera.left = -a; camera.right = a;
+      camera.top = 1; camera.bottom = -1;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    async function loadRobot() {
+      const gltf = await new GLTFLoader().loadAsync('./robot.glb');
+      const model = gltf.scene;
+      const bbox = new THREE.Box3().setFromObject(model);
+      const center = bbox.getCenter(new THREE.Vector3());
+      modelHeight = Math.max(bbox.getSize(new THREE.Vector3()).y, 0.001);
+      // 足元がローカル原点(0,0,0)になるように調整
+      model.position.set(-center.x, -bbox.min.y, -center.z);
+      robot.add(model);
+      if (gltf.animations.length > 0) {
+        mixer = new THREE.AnimationMixer(model);
+        mixer.clipAction(gltf.animations[0]).play();
+      }
+    }
+
+    async function initHandTracker() {
+      // 0.10.14はブラウザ向けESモジュール/WASM両方の公開例がある版
+      const { FilesetResolver, HandLandmarker } = await import(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs'
+      );
+      const wasmRoot = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+      const vision = await FilesetResolver.forVisionTasks(wasmRoot);
+      const opts = {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+          delegate: 'GPU'
+        },
+        runningMode: 'VIDEO',
+        numHands: 1
+      };
+      try {
+        return await HandLandmarker.createFromOptions(vision, opts);
+      } catch (e) {
+        // 一部端末はGPU初期化できないためCPUへフォールバック
+        opts.baseOptions.delegate = 'CPU';
+        return await HandLandmarker.createFromOptions(vision, opts);
+      }
+    }
+
+    async function startCamera() {
+      stream?.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      video.srcObject = stream;
+      video.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
+      await video.play();
+      lastVideoTime = -1;
+      robot.visible = false;
+    }
+
+    // MediaPipeの正規化座標 -> 画面のピクセル座標
+    // CSS object-fit: cover の切り抜きと自撮りミラーにも対応
+    function screenPoint(point) {
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const factor = Math.max(vw / video.videoWidth, vh / video.videoHeight);
+      const drawW = video.videoWidth * factor;
+      const drawH = video.videoHeight * factor;
+      const shiftX = (vw - drawW) / 2;
+      const shiftY = (vh - drawH) / 2;
+      const x = facingMode === 'user' ? 1 - point.x : point.x;
+      return { x: shiftX + x * drawW, y: shiftY + point.y * drawH };
+    }
+
+    function updateRobot(landmarks) {
+      const wrist = screenPoint(landmarks[0]);     // 手首
+      const index = screenPoint(landmarks[5]);     // 人差し指の付け根
+      const middle = screenPoint(landmarks[9]);    // 中指の付け根
+      const pinky = screenPoint(landmarks[17]);    // 小指の付け根
+
+      // 手のひら中心：手首と中指付け根のおおむね中間
+      const cx = (wrist.x + middle.x) / 2;
+      const cy = (wrist.y + middle.y) / 2;
+      const x = (cx / window.innerWidth * 2 - 1) * camera.right;
+      const y = 1 - cy / window.innerHeight * 2;
+
+      // 手が近づくと大きく、離れると小さく見える
+      const palmWidth = Math.hypot(index.x - pinky.x, index.y - pinky.y);
+      const desiredHeight = palmWidth * 1.7 * 2 / window.innerHeight;
+      const scale = desiredHeight / modelHeight;
+
+      // 手首から中指方向へロボットの上下方向を合わせる
+      const dx = middle.x - wrist.x;
+      const dy = wrist.y - middle.y; // Three.jsでは上がプラス
+      const angle = -Math.atan2(dx, dy);
+
+      if (!robot.visible) {
+        robot.position.set(x, y, 0);
+        robot.scale.setScalar(scale);
+        robot.rotation.z = angle;
+        robot.visible = true;
+      } else {
+        const ease = 0.28; // 手ぶれ補正
+        robot.position.x = THREE.MathUtils.lerp(robot.position.x, x, ease);
+        robot.position.y = THREE.MathUtils.lerp(robot.position.y, y, ease);
+        const s = THREE.MathUtils.lerp(robot.scale.x, scale, ease);
+        robot.scale.setScalar(s);
+        const diff = Math.atan2(Math.sin(angle - robot.rotation.z), Math.cos(angle - robot.rotation.z));
+        robot.rotation.z += diff * ease;
+      }
+    }
+
+    function frame() {
+      requestAnimationFrame(frame);
+      if (started && handLandmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        try {
+          const result = handLandmarker.detectForVideo(video, performance.now());
+          if (result.landmarks.length > 0) {
+            updateRobot(result.landmarks[0]);
+            status.textContent = '手を追跡中 — 手を動かしてみよう';
+          } else {
+            robot.visible = false;
+            status.textContent = '手のひらをカメラに向けてください';
+          }
+        } catch (e) {
+          status.textContent = `手の検出エラー: ${e.message}`;
+        }
+      }
+      const delta = clock.getDelta();
+      mixer?.update(delta);
+      renderer.render(scene, camera);
+    }
+    frame();
+
+    startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      try {
+        status.textContent = '手の検出モデルを準備中…';
+        handLandmarker ??= await initHandTracker();
+        status.textContent = 'robot.glbを読み込み中…';
+        if (robot.children.length === 0) await loadRobot();
+        status.textContent = 'カメラ起動中…';
+        await startCamera();
+        started = true;
+        startBtn.hidden = true;
+        switchBtn.hidden = false;
+        status.textContent = '手のひらをカメラに向けてください';
+      } catch (e) {
+        console.error('手のひらARの起動エラー:', e);
+        status.textContent = `開始できません: ${e.message}（Consoleの赤いエラーと読み込みURLを確認）`;
+        startBtn.disabled = false;
+      }
+    });
+
+    switchBtn.addEventListener('click', async () => {
+      switchBtn.disabled = true;
+      started = false;
+      facingMode = facingMode === 'environment' ? 'user' : 'environment';
+      try {
+        await startCamera();
+        started = true;
+      } catch (e) {
+        status.textContent = `カメラ切替エラー: ${e.message}`;
+      } finally {
+        switchBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
